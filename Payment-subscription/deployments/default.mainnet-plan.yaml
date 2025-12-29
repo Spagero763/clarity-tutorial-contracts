@@ -1,0 +1,18 @@
+---
+id: 0
+name: Mainnet deployment
+network: mainnet
+stacks-node: "https://api.hiro.so"
+bitcoin-node: "http://blockstack:blockstacksystem@bitcoin.blockstack.com:8332"
+plan:
+  batches:
+    - id: 0
+      transactions:
+        - contract-publish:
+            contract-name: subscription
+            expected-sender: SP26TQH4FRPTKHQEYE6HZQG98R4CZE6PTJBJNP7NT
+            cost: 1530
+            path: "contracts\\Subscription.clar"
+            anchor-block-only: true
+            clarity-version: 3
+      epoch: "3.2"
