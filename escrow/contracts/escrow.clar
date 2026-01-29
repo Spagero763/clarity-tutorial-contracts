@@ -1,50 +1,105 @@
-;; escrow.clar
+﻿;; Escrow Contract - Enhanced Multi-Party Escrow System
+;; Secure fund holding with dispute resolution support
 
-(define-data-var escrow-balance uint u0)
-(define-data-var depositor (optional principal) none)
-(define-data-var beneficiary (optional principal) none)
+;; Constants
+(define-constant contract-owner tx-sender)
+(define-constant err-escrow-exists (err u100))
+(define-constant err-zero-amount (err u101))
+(define-constant err-no-beneficiary (err u102))
+(define-constant err-empty-escrow (err u103))
+(define-constant err-not-authorized (err u104))
+(define-constant err-invalid-state (err u105))
+(define-constant err-escrow-not-found (err u106))
 
-;; Deposit STX into escrow
-(define-public (deposit (receiver principal) (amount uint))
-  (begin
-    (asserts! (is-none (var-get depositor)) (err u100)) ;; escrow must be empty
-    (asserts! (> amount u0) (err u101))                 ;; amount > 0
+;; Escrow states
+(define-constant STATE-PENDING u0)
+(define-constant STATE-RELEASED u1)
+(define-constant STATE-REFUNDED u2)
+(define-constant STATE-DISPUTED u3)
 
-    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
-
-    (var-set escrow-balance amount)
-    (var-set depositor (some tx-sender))
-    (var-set beneficiary (some receiver))
-
-    (ok amount)
-  )
-)
-
-;; Release escrowed funds to beneficiary
-(define-public (release)
-  (let (
-    (receiver (unwrap! (var-get beneficiary) (err u102)))
-    (amount (var-get escrow-balance))
-  )
-    (begin
-      (asserts! (> amount u0) (err u103))
-
-      (try! (stx-transfer? amount (as-contract tx-sender) receiver))
-
-      (var-set escrow-balance u0)
-      (var-set depositor none)
-      (var-set beneficiary none)
-
-      (ok true)
-    )
-  )
-)
-
-;; Read escrow state
-(define-read-only (get-escrow)
+;; Data structures
+(define-map escrows
+  uint
   {
-    balance: (var-get escrow-balance),
-    depositor: (var-get depositor),
-    beneficiary: (var-get beneficiary)
+    depositor: principal,
+    beneficiary: principal,
+    amount: uint,
+    state: uint,
+    created-at: uint,
+    description: (string-utf8 256)
   }
+)
+
+(define-data-var escrow-nonce uint u0)
+
+;; Create new escrow
+(define-public (create-escrow (receiver principal) (amount uint) (description (string-utf8 256)))
+  (let (
+    (escrow-id (var-get escrow-nonce))
+  )
+    (asserts! (> amount u0) err-zero-amount)
+    (asserts! (not (is-eq receiver tx-sender)) err-invalid-state)
+    
+    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+    
+    (map-set escrows escrow-id {
+      depositor: tx-sender,
+      beneficiary: receiver,
+      amount: amount,
+      state: STATE-PENDING,
+      created-at: block-height,
+      description: description
+    })
+    
+    (var-set escrow-nonce (+ escrow-id u1))
+    (ok escrow-id)
+  )
+)
+
+;; Release funds to beneficiary
+(define-public (release (escrow-id uint))
+  (let (
+    (escrow (unwrap! (map-get? escrows escrow-id) err-escrow-not-found))
+    (depositor (get depositor escrow))
+    (beneficiary (get beneficiary escrow))
+    (amount (get amount escrow))
+    (state (get state escrow))
+  )
+    (asserts! (is-eq state STATE-PENDING) err-invalid-state)
+    (asserts! (is-eq tx-sender depositor) err-not-authorized)
+    
+    (try! (as-contract (stx-transfer? amount tx-sender beneficiary)))
+    
+    (map-set escrows escrow-id (merge escrow { state: STATE-RELEASED }))
+    (ok true)
+  )
+)
+
+;; Refund to depositor (beneficiary releases)
+(define-public (refund (escrow-id uint))
+  (let (
+    (escrow (unwrap! (map-get? escrows escrow-id) err-escrow-not-found))
+    (depositor (get depositor escrow))
+    (beneficiary (get beneficiary escrow))
+    (amount (get amount escrow))
+    (state (get state escrow))
+  )
+    (asserts! (is-eq state STATE-PENDING) err-invalid-state)
+    (asserts! (is-eq tx-sender beneficiary) err-not-authorized)
+    
+    (try! (as-contract (stx-transfer? amount tx-sender depositor)))
+    
+    (map-set escrows escrow-id (merge escrow { state: STATE-REFUNDED }))
+    (ok true)
+  )
+)
+
+;; Read escrow details
+(define-read-only (get-escrow (escrow-id uint))
+  (map-get? escrows escrow-id)
+)
+
+;; Get total escrows created
+(define-read-only (get-escrow-count)
+  (var-get escrow-nonce)
 )
